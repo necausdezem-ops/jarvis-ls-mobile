@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
@@ -230,7 +232,7 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
             containerColor = Panel,
             title = { Text("Configurações do Core", color = Cyan) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("ESCOLHA O CÉREBRO", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(selected = aiMode == "LOCAL", onClick = { aiMode = "LOCAL"; prefs.edit().putString("ai_mode", "LOCAL").apply() })
