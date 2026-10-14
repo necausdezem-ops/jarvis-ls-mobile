@@ -104,11 +104,12 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
     val context = LocalContext.current
     val messages = remember { mutableStateListOf(Message(true, "J.A.R.V.I.S. LS Mobile iniciado. Sistemas locais disponíveis.")) }
     var input by remember { mutableStateOf("") }
-    var apiKey by remember { mutableStateOf("") }
+    var localModelReady by remember { mutableStateOf(LocalAiEngine.isModelInstalled(context)) }
+    var downloadProgress by remember { mutableStateOf(-1f) }
     var showSettings by remember { mutableStateOf(false) }
     var thinking by remember { mutableStateOf(false) }
     var listening by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("SISTEMA PRONTO · MODO HÍBRIDO") }
+    var status by remember { mutableStateOf("SISTEMA PRONTO · IA LOCAL") }
     val scope = rememberCoroutineScope()
 
     fun sendMessage(raw: String) {
@@ -120,15 +121,22 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
         status = "ANALISANDO COMANDO"
         scope.launch {
             val local = localCommand(context, text)
-            val answer = if (local != null) local else if (apiKey.isNotBlank()) {
-                status = "CONECTANDO À IA"
-                askGemini(apiKey, text) ?: "Não consegui conectar à IA online. Confira a internet e a chave; posso continuar com comandos locais."
+            val answer = if (local != null) {
+                local
+            } else if (LocalAiEngine.isModelInstalled(context)) {
+                status = "IA LOCAL PROCESSANDO"
+                try {
+                    LocalAiEngine.reply(context, text)
+                } catch (e: Exception) {
+                    "Não consegui iniciar a IA local: ${e.message ?: "erro desconhecido"}. Tente reiniciar o aplicativo."
+                }
             } else {
-                "Ainda não tenho uma resposta local para isso. Abra Configurações e adicione uma chave Gemini para ativar respostas online. Os comandos básicos continuam funcionando sem API."
+                "Meu modelo de IA ainda não foi instalado. Abra Configurações e toque em BAIXAR IA LOCAL. O download inicial tem cerca de 347 MB; depois poderei conversar offline."
             }
             messages.add(Message(true, answer))
             thinking = false
-            status = if (local != null) "COMANDO LOCAL CONCLUÍDO" else "RESPOSTA PRONTA"
+            localModelReady = LocalAiEngine.isModelInstalled(context)
+            status = if (local != null) "COMANDO LOCAL CONCLUÍDO" else if (localModelReady) "RESPOSTA GERADA OFFLINE" else "AGUARDANDO INSTALAÇÃO DA IA"
             speak(answer)
         }
     }
@@ -174,7 +182,7 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             InfoTile("BATERIA", batteryPercent(context).toString() + "%", Modifier.weight(1f))
             InfoTile("HORA", SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date()), Modifier.weight(1f))
-            InfoTile("IA", if (apiKey.isBlank()) "LOCAL" else "HÍBRIDA", Modifier.weight(1f))
+            InfoTile("IA", if (localModelReady) "PRONTA" else "BAIXAR", Modifier.weight(1f))
         }
         Spacer(Modifier.height(10.dp))
         Text(status, color = Cyan.copy(alpha = 0.8f), fontSize = 10.sp, letterSpacing = 1.2.sp)
@@ -210,13 +218,40 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
             title = { Text("Configurações do Core", color = Cyan) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Chave Gemini API (opcional). Fica apenas na memória enquanto o app está aberto.", color = Muted, fontSize = 12.sp)
-                    OutlinedTextField(value = apiKey, onValueChange = { apiKey = it }, label = { Text("API key") }, singleLine = true)
-                    Text("Sem chave, funcionam os comandos locais básicos. Não publique nem compartilhe sua chave.", color = Amber, fontSize = 11.sp)
+                    Text("CÉREBRO OFFLINE · QWEN3 0.6B INT4", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("O modelo roda dentro deste aplicativo. O download inicial tem aproximadamente 347 MB e precisa de internet; depois as respostas de texto funcionam offline.", color = Muted, fontSize = 12.sp)
+                    if (localModelReady) {
+                        Text("MODELO INSTALADO · PRONTO PARA USAR OFFLINE", color = Cyan, fontSize = 11.sp)
+                    } else if (downloadProgress >= 0f) {
+                        LinearProgressIndicator(progress = { downloadProgress }, modifier = Modifier.fillMaxWidth(), color = Cyan)
+                        Text("BAIXANDO MODELO: ${(downloadProgress * 100).toInt()}%", color = Amber, fontSize = 11.sp)
+                    } else {
+                        Text("Recomendado: Wi-Fi e pelo menos 1 GB de espaço livre.", color = Amber, fontSize = 11.sp)
+                    }
                 }
             },
-            confirmButton = { TextButton(onClick = { showSettings = false }) { Text("SALVAR NA SESSÃO", color = Cyan) } },
-            dismissButton = { TextButton(onClick = { apiKey = ""; showSettings = false }) { Text("LIMPAR", color = Amber) } }
+            confirmButton = {
+                TextButton(
+                    enabled = !localModelReady && downloadProgress < 0f,
+                    onClick = {
+                        scope.launch {
+                            try {
+                                downloadProgress = 0f
+                                status = "BAIXANDO CÉREBRO LOCAL"
+                                LocalAiEngine.downloadModel(context) { p -> downloadProgress = p }
+                                localModelReady = true
+                                downloadProgress = -1f
+                                status = "IA LOCAL INSTALADA"
+                            } catch (e: Exception) {
+                                downloadProgress = -1f
+                                status = "FALHA NO DOWNLOAD DA IA"
+                                messages.add(Message(true, "Não consegui baixar o modelo. Confere a internet e tenta de novo. Detalhe: ${e.message ?: "erro desconhecido"}"))
+                            }
+                        }
+                    }
+                ) { Text(if (localModelReady) "IA INSTALADA" else if (downloadProgress >= 0f) "BAIXANDO..." else "BAIXAR IA LOCAL", color = Cyan) }
+            },
+            dismissButton = { TextButton(onClick = { showSettings = false }) { Text("FECHAR", color = Amber) } }
         )
     }
 }
@@ -290,32 +325,4 @@ private fun openAppOrWeb(context: Context, packageName: String, url: String): St
     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     context.startActivity(intent)
     return if (launch != null) "Abrindo o aplicativo solicitado." else "O aplicativo não foi encontrado; abrindo a versão web."
-}
-
-private suspend fun askGemini(apiKey: String, prompt: String): String? = withContext(Dispatchers.IO) {
-    var connection: HttpURLConnection? = null
-    try {
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey")
-        connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15000
-            readTimeout = 20000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-        }
-        val body = JSONObject()
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", "Você é J.A.R.V.I.S., assistente útil, objetivo e seguro. Responda em português brasileiro."))))
-            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
-        connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-        val code = connection.responseCode
-        val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-        val response = stream.bufferedReader().use { it.readText() }
-        if (code !in 200..299) return@withContext "A API retornou HTTP " + code + ". Verifique a chave e os limites da conta."
-        JSONObject(response).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
-            ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")?.takeIf { it.isNotBlank() }
-    } catch (_: Exception) {
-        null
-    } finally {
-        connection?.disconnect()
-    }
 }
