@@ -118,7 +118,7 @@ object LocalAiEngine {
                 }
             }
         }
-        val answer = activeConversation!!.sendMessage(prompt).text.trim()
+        val answer = activeConversation!!.sendMessage(prompt).toString().trim()
         answer.ifBlank { "Não consegui formular uma resposta. Tenta perguntar de outro jeito." }
     }
 
