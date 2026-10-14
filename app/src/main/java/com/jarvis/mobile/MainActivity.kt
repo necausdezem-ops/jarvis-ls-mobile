@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -110,6 +111,11 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
     var thinking by remember { mutableStateOf(false) }
     var listening by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("SISTEMA PRONTO · IA LOCAL") }
+    val prefs = remember { context.getSharedPreferences("jarvis_settings", Context.MODE_PRIVATE) }
+    var aiMode by remember { mutableStateOf(prefs.getString("ai_mode", "LOCAL") ?: "LOCAL") }
+    var apiBaseUrl by remember { mutableStateOf(prefs.getString("api_base_url", "https://api.openai.com/v1") ?: "https://api.openai.com/v1") }
+    var apiKey by remember { mutableStateOf(prefs.getString("api_key", "") ?: "") }
+    var apiModel by remember { mutableStateOf(prefs.getString("api_model", "gpt-4o-mini") ?: "gpt-4o-mini") }
     val scope = rememberCoroutineScope()
 
     fun sendMessage(raw: String) {
@@ -123,6 +129,13 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
             val local = localCommand(context, text)
             val answer = if (local != null) {
                 local
+            } else if (aiMode == "API") {
+                status = "IA NA NUVEM PROCESSANDO"
+                try {
+                    ApiAiEngine.reply(apiBaseUrl, apiKey, apiModel, text)
+                } catch (e: Exception) {
+                    "Falha na API: ${e.message ?: "erro desconhecido"}. Confira provedor, modelo, internet e chave nas Configurações."
+                }
             } else if (LocalAiEngine.isModelInstalled(context)) {
                 status = "IA LOCAL PROCESSANDO"
                 try {
@@ -131,12 +144,12 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
                     "Não consegui iniciar a IA local: ${e.message ?: "erro desconhecido"}. Tente reiniciar o aplicativo."
                 }
             } else {
-                "Meu modelo de IA ainda não foi instalado. Abra Configurações e toque em BAIXAR IA LOCAL. O download inicial tem cerca de 347 MB; depois poderei conversar offline."
+                "O cérebro local ainda não foi instalado. Abra Configurações e toque em BAIXAR IA LOCAL. Ou mude para IA por API e configure seu provedor."
             }
             messages.add(Message(true, answer))
             thinking = false
             localModelReady = LocalAiEngine.isModelInstalled(context)
-            status = if (local != null) "COMANDO LOCAL CONCLUÍDO" else if (localModelReady) "RESPOSTA GERADA OFFLINE" else "AGUARDANDO INSTALAÇÃO DA IA"
+            status = if (local != null) "COMANDO LOCAL CONCLUÍDO" else if (aiMode == "API") "RESPOSTA VIA API" else if (localModelReady) "RESPOSTA GERADA OFFLINE" else "AGUARDANDO CONFIGURAÇÃO DA IA"
             speak(answer)
         }
     }
@@ -218,9 +231,31 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
             title = { Text("Configurações do Core", color = Cyan) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("CÉREBRO OFFLINE · QWEN3 0.6B INT4", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Text("O modelo roda dentro deste aplicativo. O download inicial tem aproximadamente 347 MB e precisa de internet; depois as respostas de texto funcionam offline.", color = Muted, fontSize = 12.sp)
-                    if (localModelReady) {
+                    Text("ESCOLHA O CÉREBRO", color = Cyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = aiMode == "LOCAL", onClick = { aiMode = "LOCAL"; prefs.edit().putString("ai_mode", "LOCAL").apply() })
+                        Text("IA local · offline", color = Color.White, fontSize = 12.sp)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = aiMode == "API", onClick = { aiMode = "API"; prefs.edit().putString("ai_mode", "API").apply() })
+                        Text("IA por API · modelos mais capazes", color = Color.White, fontSize = 12.sp)
+                    }
+                    if (aiMode == "API") {
+                        Text("Compatível com APIs no formato OpenAI (ex.: OpenAI ou provedores compatíveis). O uso pode ter custo conforme seu provedor.", color = Muted, fontSize = 11.sp)
+                        OutlinedTextField(value = apiBaseUrl, onValueChange = { apiBaseUrl = it }, label = { Text("URL base da API") }, singleLine = true)
+                        OutlinedTextField(value = apiModel, onValueChange = { apiModel = it }, label = { Text("Nome do modelo") }, singleLine = true)
+                        OutlinedTextField(value = apiKey, onValueChange = { apiKey = it }, label = { Text("Chave da API") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+                        TextButton(onClick = {
+                            prefs.edit().putString("ai_mode", aiMode).putString("api_base_url", apiBaseUrl.trim().trimEnd('/')).putString("api_model", apiModel.trim()).putString("api_key", apiKey.trim()).apply()
+                            status = "CONFIGURAÇÃO DA API SALVA"
+                        }) { Text("SALVAR CONFIGURAÇÃO DA API", color = Cyan) }
+                    } else {
+                        Text("QWEN3 0.6B INT4 · modelo local", color = Cyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("O download inicial tem aproximadamente 347 MB; depois as respostas de texto funcionam offline. Modelos pequenos têm capacidade limitada.", color = Muted, fontSize = 12.sp)
+                    }
+                    if (aiMode == "API") {
+                        Text(if (apiKey.isBlank()) "FALTA CONFIGURAR A CHAVE DA API" else "MODO API SELECIONADO", color = if (apiKey.isBlank()) Amber else Cyan, fontSize = 11.sp)
+                    } else if (localModelReady) {
                         Text("MODELO INSTALADO · PRONTO PARA USAR OFFLINE", color = Cyan, fontSize = 11.sp)
                     } else if (downloadProgress >= 0f) {
                         LinearProgressIndicator(progress = { downloadProgress }, modifier = Modifier.fillMaxWidth(), color = Cyan)
@@ -232,7 +267,7 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
             },
             confirmButton = {
                 TextButton(
-                    enabled = !localModelReady && downloadProgress < 0f,
+                    enabled = aiMode == "LOCAL" && !localModelReady && downloadProgress < 0f,
                     onClick = {
                         scope.launch {
                             try {
@@ -249,7 +284,7 @@ private fun JarvisHome(speak: (String) -> Unit, stopSpeaking: () -> Unit) {
                             }
                         }
                     }
-                ) { Text(if (localModelReady) "IA INSTALADA" else if (downloadProgress >= 0f) "BAIXANDO..." else "BAIXAR IA LOCAL", color = Cyan) }
+                ) { Text(if (aiMode == "API") "MODO API ATIVO" else if (localModelReady) "IA INSTALADA" else if (downloadProgress >= 0f) "BAIXANDO..." else "BAIXAR IA LOCAL", color = Cyan) }
             },
             dismissButton = { TextButton(onClick = { showSettings = false }) { Text("FECHAR", color = Amber) } }
         )
